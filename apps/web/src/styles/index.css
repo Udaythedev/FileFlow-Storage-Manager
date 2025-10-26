@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 12px;
+}
+
+.dragging {
+  opacity: 0.7;
+  transform: scale(0.98);
+}
+
+.drop-target {
+  outline: 2px dashed rgba(148, 163, 184, 0.6);
+  outline-offset: 2px;
+  background-color: rgba(30, 41, 59, 0.5);
+}

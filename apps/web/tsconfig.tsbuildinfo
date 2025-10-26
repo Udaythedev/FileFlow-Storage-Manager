@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/apptypes.ts","./src/main.tsx","./src/components/filegrid.tsx","./src/components/sidebarfolders.tsx","./src/components/storagetreemap.tsx","./src/lib/duplicates.ts","./src/lib/junk.ts","./src/lib/__tests__/duplicates.test.ts"],"version":"5.9.3"}
