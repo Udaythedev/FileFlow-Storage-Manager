@@ -18,6 +18,8 @@ function FolderNode({ folder, depth, currentId, highlightedId, onSelect, onDropF
   onDropFile: (fileIds: string[], folderId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(true); // Default expanded for now
+  const [isOver, setIsOver] = useState(false);
+  const [dragCount, setDragCount] = useState<number | null>(null);
   const padding = useMemo(() => ({ paddingLeft: `${depth * 12}px` }), [depth]);
   const isActive = currentId === folder.id;
   const isHighlighted = highlightedId === folder.id;
@@ -29,13 +31,25 @@ function FolderNode({ folder, depth, currentId, highlightedId, onSelect, onDropF
   }
   function handleDragEnter(e: React.DragEvent<HTMLDivElement>) {
     e.currentTarget.classList.add('drop-target');
+    setIsOver(true);
+    try {
+      const payload = e.dataTransfer.getData('application/json');
+      if (payload) {
+        const data = JSON.parse(payload) as { fileIds?: string[] };
+        if (data.fileIds) setDragCount(data.fileIds.length);
+      }
+    } catch {}
   }
   function handleDragLeave(e: React.DragEvent<HTMLDivElement>) {
     e.currentTarget.classList.remove('drop-target');
+    setIsOver(false);
+    setDragCount(null);
   }
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     (e.currentTarget as HTMLDivElement).classList.remove('drop-target');
+    setIsOver(false);
+    setDragCount(null);
     const payload = e.dataTransfer.getData('application/json');
     if (!payload) return;
     try {
@@ -51,7 +65,7 @@ function FolderNode({ folder, depth, currentId, highlightedId, onSelect, onDropF
   return (
     <>
       <div
-        className={`rounded px-2 py-1 cursor-pointer hover:bg-slate-800/60 transition-colors flex items-center gap-2 ${
+        className={`rounded px-2 py-1 cursor-pointer hover:bg-slate-800/60 transition-colors flex items-center gap-2 relative ${
           isActive ? 'bg-slate-800' : isHighlighted ? 'bg-amber-500/20 border border-amber-500/50' : ''
         }`}
         style={padding}
@@ -80,6 +94,11 @@ function FolderNode({ folder, depth, currentId, highlightedId, onSelect, onDropF
           {folder.name}
         </span>
         <span className="text-xs text-slate-500">{folder.files.length}</span>
+        {isOver && (
+          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs px-2 py-0.5 rounded bg-blue-600/80 border border-blue-500 text-white">
+            Move {dragCount ?? ''} here
+          </span>
+        )}
       </div>
       {expanded && folder.folders.map(child => (
         <FolderNode

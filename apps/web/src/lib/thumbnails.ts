@@ -8,6 +8,12 @@ const CACHE_NAME = 'fileflow-thumbnails';
 // In-memory cache for this session
 const memoryCache = new Map<string, string>();
 
+// Generate a unique cache key based on file metadata
+function getCacheKey(file: FileItem): string {
+  // Combine id, name, size, and modified date for a unique key
+  return `${file.id}_${file.name}_${file.size}_${file.modifiedAt}`;
+}
+
 // Check if we can use IndexedDB for persistent cache
 let db: IDBDatabase | null = null;
 
@@ -31,9 +37,9 @@ async function initDB(): Promise<IDBDatabase | null> {
   });
 }
 
-async function getCachedThumb(fileId: string): Promise<string | null> {
+async function getCachedThumb(cacheKey: string): Promise<string | null> {
   // Check memory first
-  if (memoryCache.has(fileId)) return memoryCache.get(fileId)!;
+  if (memoryCache.has(cacheKey)) return memoryCache.get(cacheKey)!;
 
   // Check IndexedDB
   const database = await initDB();
@@ -43,10 +49,10 @@ async function getCachedThumb(fileId: string): Promise<string | null> {
     try {
       const tx = database.transaction('thumbnails', 'readonly');
       const store = tx.objectStore('thumbnails');
-      const req = store.get(fileId);
+      const req = store.get(cacheKey);
       req.onsuccess = () => {
         const result = req.result?.dataUrl ?? null;
-        if (result) memoryCache.set(fileId, result);
+        if (result) memoryCache.set(cacheKey, result);
         resolve(result);
       };
       req.onerror = () => resolve(null);
@@ -56,8 +62,8 @@ async function getCachedThumb(fileId: string): Promise<string | null> {
   });
 }
 
-async function cacheThumb(fileId: string, dataUrl: string): Promise<void> {
-  memoryCache.set(fileId, dataUrl);
+async function cacheThumb(cacheKey: string, dataUrl: string): Promise<void> {
+  memoryCache.set(cacheKey, dataUrl);
 
   const database = await initDB();
   if (!database) return;
@@ -65,7 +71,7 @@ async function cacheThumb(fileId: string, dataUrl: string): Promise<void> {
   try {
     const tx = database.transaction('thumbnails', 'readwrite');
     const store = tx.objectStore('thumbnails');
-    store.put({ id: fileId, dataUrl });
+    store.put({ id: cacheKey, dataUrl });
   } catch (e) {
     console.warn('Failed to cache thumbnail:', e);
   }
@@ -74,8 +80,9 @@ async function cacheThumb(fileId: string, dataUrl: string): Promise<void> {
 export async function generateImageThumbnail(file: FileItem): Promise<string | null> {
   if (!file.handle) return null;
 
-  // Check cache
-  const cached = await getCachedThumb(file.id);
+  // Check cache with unique key
+  const cacheKey = getCacheKey(file);
+  const cached = await getCachedThumb(cacheKey);
   if (cached) return cached;
 
   try {
@@ -116,7 +123,7 @@ export async function generateImageThumbnail(file: FileItem): Promise<string | n
           const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
           
           URL.revokeObjectURL(url);
-          cacheThumb(file.id, dataUrl);
+          cacheThumb(cacheKey, dataUrl);
           resolve(dataUrl);
         } catch (e) {
           console.error('Canvas error:', e);
@@ -141,8 +148,9 @@ export async function generateImageThumbnail(file: FileItem): Promise<string | n
 export async function generateVideoThumbnail(file: FileItem): Promise<string | null> {
   if (!file.handle) return null;
 
-  // Check cache
-  const cached = await getCachedThumb(file.id);
+  // Check cache with unique key
+  const cacheKey = getCacheKey(file);
+  const cached = await getCachedThumb(cacheKey);
   if (cached) return cached;
 
   try {
@@ -195,7 +203,7 @@ export async function generateVideoThumbnail(file: FileItem): Promise<string | n
           const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
           
           URL.revokeObjectURL(url);
-          cacheThumb(file.id, dataUrl);
+          cacheThumb(cacheKey, dataUrl);
           resolve(dataUrl);
         } catch (e) {
           console.error('Video canvas error:', e);

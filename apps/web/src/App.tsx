@@ -14,6 +14,10 @@ import PreviewModal from './components/PreviewModal';
 import Breadcrumbs from './components/Breadcrumbs';
 import DeleteConfirmation from './components/DeleteConfirmation';
 import CategoryFilters from './components/CategoryFilters';
+import ToastContainer, { type Toast } from './components/Toast';
+import ContextMenu, { type MenuItem } from './components/ContextMenu';
+import { openWithDefaultApp, getMimeType } from './lib/fileOpener';
+import { ProgressModal } from './components/Skeleton';
 
 function bytes(n: number) {
   if (n < 1024) return `${n} B`;
@@ -148,10 +152,81 @@ export default function App() {
   
   // Preview modal state
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
+  // Scroll target for FileGrid when navigating to source
+  const [scrollToFileId, setScrollToFileId] = useState<string | null>(null);
   
   // Delete confirmation state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [filesToDelete, setFilesToDelete] = useState<FileItem[]>([]);
+  
+  // Toast notifications
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  
+  // Progress tracking
+  const [progressModal, setProgressModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    progress: number;
+    current: number;
+    total: number;
+    description?: string;
+  }>({
+    isOpen: false,
+    title: '',
+    progress: 0,
+    current: 0,
+    total: 0,
+  });
+  
+  const showToast = (message: string, type: Toast['type'] = 'info', duration = 3000) => {
+    const id = `${Date.now()}-${Math.random()}`;
+    setToasts(prev => [...prev, { id, message, type, duration }]);
+  };
+  
+  const dismissToast = (id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  };
+
+  // Context menu state
+  const [menuState, setMenuState] = useState<{ open: boolean; x: number; y: number; file: FileItem | null }>({ open: false, x: 0, y: 0, file: null });
+
+  const openContextMenu = (file: FileItem, pos: { x: number; y: number }) => {
+    setMenuState({ open: true, x: pos.x, y: pos.y, file });
+  };
+  const closeContextMenu = () => setMenuState(s => ({ ...s, open: false }));
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if typing in input/textarea
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      
+      // Delete key - delete selected files
+      if (e.key === 'Delete' && selectedFiles.size > 0) {
+        e.preventDefault();
+        handleDeleteSelected();
+        return;
+      }
+      
+      // Ctrl+A - Select all files
+      if (e.key === 'a' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        selectAllFiles();
+        return;
+      }
+      
+      // Escape - Clear selection or close preview
+      if (e.key === 'Escape') {
+        if (selectedFiles.size > 0) {
+          clearSelection();
+        }
+        return;
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedFiles.size]);
 
   const currentFolder = useMemo(() => {
     const found = findFolderById(root, currentFolderId);
@@ -332,10 +407,24 @@ export default function App() {
     async function confirmDelete() {
       setShowDeleteConfirm(false);
       setDeleting(true);
+      const count = filesToDelete.length;
+      
+      // Show progress modal for large batch deletes
+      if (count > 5) {
+        setProgressModal({
+          isOpen: true,
+          title: 'Deleting Files',
+          progress: 0,
+          current: 0,
+          total: count,
+          description: 'Please wait while files are being deleted...',
+        });
+      }
       
       try {
         // Delete on disk when possible
-        for (const file of filesToDelete) {
+        for (let i = 0; i < filesToDelete.length; i++) {
+          const file = filesToDelete[i];
           const parent = findParentWithFile(root, file.id);
           if (parent?.handle && file.handle) {
             try {
@@ -343,6 +432,16 @@ export default function App() {
             } catch (e) {
               console.warn('Delete failed for', file.name, e);
             }
+          }
+          
+          // Update progress
+          if (count > 5) {
+            const progress = Math.round(((i + 1) / count) * 100);
+            setProgressModal(prev => ({
+              ...prev,
+              progress,
+              current: i + 1,
+            }));
           }
         }
         
@@ -356,6 +455,19 @@ export default function App() {
         setRoot(updatedTree);
         setSelectedFiles(new Set());
         setFilesToDelete([]);
+        
+        // Hide progress and show success toast
+        if (count > 5) {
+          setTimeout(() => {
+            setProgressModal(prev => ({ ...prev, isOpen: false }));
+            showToast(`Successfully deleted ${count} file${count > 1 ? 's' : ''}`, 'success');
+          }, 500);
+        } else {
+          showToast(`Successfully deleted ${count} file${count > 1 ? 's' : ''}`, 'success');
+        }
+      } catch (err) {
+        setProgressModal(prev => ({ ...prev, isOpen: false }));
+        showToast('Failed to delete files', 'error');
       } finally {
         setDeleting(false);
       }
@@ -385,6 +497,7 @@ export default function App() {
         } catch (e: any) {
           console.error('Disk move failed', e);
           setError(e?.message ?? 'Disk move failed');
+          showToast(`Failed to move ${file.name}`, 'error');
           return;
         }
       }
@@ -395,15 +508,50 @@ export default function App() {
       if (!removed) return;
       const next = insertFileIntoFolder(updated, targetFolderId, removed);
       setRoot(next);
+      showToast(`Moved ${file.name} to ${destFolder.name}`, 'success');
     } catch (err) {
       console.error('Error moving file:', err);
       setError('Error moving file');
+      showToast('Error moving file', 'error');
     }
   }
 
   async function onMoveFiles(fileIds: string[], targetFolderId: string) {
-    for (const id of fileIds) {
-      await onMoveFile(id, targetFolderId);
+    const count = fileIds.length;
+    const dest = findFolderById(root, targetFolderId);
+    if (count > 5) {
+      setProgressModal({
+        isOpen: true,
+        title: 'Moving Files',
+        progress: 0,
+        current: 0,
+        total: count,
+        description: dest ? `Moving files to ${dest.name}...` : 'Moving files...'
+      });
+    }
+    try {
+      for (let i = 0; i < fileIds.length; i++) {
+        const id = fileIds[i];
+        await onMoveFile(id, targetFolderId);
+        if (count > 5) {
+          const progress = Math.round(((i + 1) / count) * 100);
+          setProgressModal(prev => ({ ...prev, progress, current: i + 1 }));
+        }
+      }
+      if (count > 1) {
+        const msg = dest ? `Moved ${count} files to ${dest.name}` : `Moved ${count} files`;
+        if (count > 5) {
+          setTimeout(() => {
+            setProgressModal(prev => ({ ...prev, isOpen: false }));
+            showToast(msg, 'success');
+          }, 400);
+        } else {
+          showToast(msg, 'success');
+        }
+      }
+    } catch (err) {
+      setProgressModal(prev => ({ ...prev, isOpen: false }));
+      showToast(`Failed to move files`, 'error');
     }
   }
 
@@ -616,6 +764,19 @@ export default function App() {
               {/* Selection toolbar */}
               {selectedFiles.size > 0 && (
                 <div className="flex items-center gap-2">
+                  {selectedFiles.size === 1 && (
+                    <button 
+                      onClick={() => {
+                        const fileId = Array.from(selectedFiles)[0];
+                        const f = findFileById(root, fileId);
+                        if (f) handleFileClick(f);
+                      }}
+                      className="px-3 py-1.5 text-sm rounded bg-blue-700/70 hover:bg-blue-700 border border-blue-800"
+                      title="Open selected file"
+                    >
+                      📂 Open
+                    </button>
+                  )}
                   <button 
                     onClick={handleDeleteSelected}
                     disabled={deleting}
@@ -741,12 +902,14 @@ export default function App() {
                   gridSize={viewPrefs.gridSize}
                   selectedFiles={selectedFiles}
                   highlightedFile={highlightedFile}
+                  scrollToFileId={scrollToFileId ?? undefined}
                   showFolders={quickFilter === null}
                   onSelectFile={handleSelectFile}
                   onFileClick={handleFileClick}
                   onFolderOpen={setCurrentFolderId}
                   onDragStart={handleDragStart}
                   onDragEnd={handleDragEnd}
+                  onContextMenu={openContextMenu}
                 />
             </div>
             <div className="p-3 border-l border-slate-800 overflow-auto">
@@ -761,13 +924,19 @@ export default function App() {
                   onGoToSource={(fileId) => {
                     const parent = findParentWithFile(root, fileId);
                     if (parent) {
-                      setShowJunk(false); // Close tools panel
+                      // Keep panel open, just navigate and highlight
+                      // Ensure file is visible in grid by clearing filters/search
+                      setQuickFilter(null);
+                      setCategoryFilter(null);
+                      setSearchQuery('');
                       setCurrentFolderId(parent.id);
                       setHighlightedFolderId(parent.id);
                       setHighlightedFile(fileId);
+                      setScrollToFileId(fileId);
                       setTimeout(() => {
                         setHighlightedFolderId(undefined);
                         setHighlightedFile(undefined);
+                        setScrollToFileId(null);
                       }, 2500);
                     }
                   }}
@@ -784,13 +953,19 @@ export default function App() {
                   onGoToSource={(fileId) => {
                     const parent = findParentWithFile(root, fileId);
                     if (parent) {
-                      setShowDupes(false); // Close tools panel
+                      // Keep panel open, just navigate and highlight
+                      // Ensure file is visible in grid by clearing filters/search
+                      setQuickFilter(null);
+                      setCategoryFilter(null);
+                      setSearchQuery('');
                       setCurrentFolderId(parent.id);
                       setHighlightedFolderId(parent.id);
                       setHighlightedFile(fileId);
+                      setScrollToFileId(fileId);
                       setTimeout(() => {
                         setHighlightedFolderId(undefined);
                         setHighlightedFile(undefined);
+                        setScrollToFileId(null);
                       }, 2500);
                     }
                   }}
@@ -822,6 +997,47 @@ export default function App() {
             />
           )}
         </main>
+        <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+        {/* Context Menu */}
+        <ContextMenu 
+          x={menuState.x}
+          y={menuState.y}
+          isOpen={menuState.open && !!menuState.file}
+          onClose={closeContextMenu}
+          items={((): MenuItem[] => {
+            const f = menuState.file;
+            if (!f) return [];
+            return [
+              { label: 'Open', onClick: () => { closeContextMenu(); handleFileClick(f); } },
+              { label: 'Open With…', onClick: async () => { closeContextMenu(); await openWithDefaultApp({ fileHandle: f.handle as any, fileName: f.name, mimeType: getMimeType(f.extension) }); showToast('Download started', 'info'); } },
+              { divider: true, label: '', onClick: () => {} },
+              { label: 'Reveal in Folders', onClick: () => {
+                  closeContextMenu();
+                  const parent = findParentWithFile(root, f.id);
+                  if (parent) {
+                    setQuickFilter(null); setCategoryFilter(null); setSearchQuery('');
+                    setCurrentFolderId(parent.id);
+                    setHighlightedFolderId(parent.id);
+                    setHighlightedFile(f.id);
+                    setScrollToFileId(f.id);
+                    setTimeout(() => { setHighlightedFolderId(undefined); setHighlightedFile(undefined); setScrollToFileId(null); }, 2000);
+                  }
+                }
+              },
+              { label: 'Copy Name', onClick: async () => { try { await navigator.clipboard.writeText(f.name); showToast('Name copied', 'success'); } catch { showToast('Copy failed', 'error'); } } },
+              { divider: true, label: '', onClick: () => {} },
+              { label: 'Delete', danger: true, onClick: () => { closeContextMenu(); setSelectedFiles(new Set([f.id])); handleDeleteSelected(); } },
+            ];
+          })()}
+        />
+        <ProgressModal 
+          isOpen={progressModal.isOpen}
+          title={progressModal.title}
+          progress={progressModal.progress}
+          current={progressModal.current}
+          total={progressModal.total}
+          description={progressModal.description}
+        />
       </div>
     );
   } catch (err) {

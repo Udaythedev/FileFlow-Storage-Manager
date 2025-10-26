@@ -4,6 +4,7 @@ import { getFileTypeIcon } from '../lib/fileCategories';
 import { generateThumbnail } from '../lib/thumbnails';
 import type { ViewMode } from '../lib/viewPreferences';
 import { getGridItemSize, getGalleryItemSize } from '../lib/viewPreferences';
+import { ThumbnailSkeleton } from './Skeleton';
 
 type Props = {
   folder: Folder;
@@ -12,12 +13,14 @@ type Props = {
   gridSize: number;
   selectedFiles: Set<string>;
   highlightedFile?: string;
+  scrollToFileId?: string;
   showFolders?: boolean; // Hide folders when filtering by category
   onSelectFile: (fileId: string, multi: boolean, range: boolean) => void;
   onFileClick: (file: FileItem) => void;
   onFolderOpen: (folderId: string) => void;
   onDragStart: (fileIds: string[]) => void;
   onDragEnd: () => void;
+  onContextMenu?: (file: FileItem, pos: { x: number; y: number }) => void;
 };
 
 export default function FileGrid({
@@ -27,29 +30,57 @@ export default function FileGrid({
   gridSize,
   selectedFiles,
   highlightedFile,
+  scrollToFileId,
   showFolders = true,
   onSelectFile,
   onFileClick,
   onFolderOpen,
   onDragStart,
   onDragEnd,
+  onContextMenu,
 }: Props) {
   const [thumbnails, setThumbnails] = useState<Map<string, string>>(new Map());
+  const [loadingThumbs, setLoadingThumbs] = useState<Set<string>>(new Set());
   const [lastSelectedIdx, setLastSelectedIdx] = useState<number>(-1);
 
   // Load thumbnails for visible files
   useEffect(() => {
     const loadThumbs = async () => {
       for (const file of files.slice(0, 50)) { // Load first 50
-        if (thumbnails.has(file.id)) continue;
+        if (thumbnails.has(file.id) || loadingThumbs.has(file.id)) continue;
+        
+        // Mark as loading
+        setLoadingThumbs((prev) => new Set(prev).add(file.id));
+        
         const thumb = await generateThumbnail(file);
         if (thumb) {
           setThumbnails((prev) => new Map(prev).set(file.id, thumb));
         }
+        
+        // Remove from loading
+        setLoadingThumbs((prev) => {
+          const next = new Set(prev);
+          next.delete(file.id);
+          return next;
+        });
       }
     };
     loadThumbs();
   }, [files]);
+
+  // Scroll the requested file into view when provided
+  useEffect(() => {
+    if (!scrollToFileId) return;
+    // Wait for DOM to render
+    const id = scrollToFileId;
+    const t = setTimeout(() => {
+      const el = document.querySelector(`[data-file-id="${id}"]`);
+      if (el && 'scrollIntoView' in el) {
+        (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 0);
+    return () => clearTimeout(t);
+  }, [scrollToFileId, files.length, viewMode, gridSize]);
 
   const handleClick = useCallback(
     (file: FileItem, idx: number, e: React.MouseEvent) => {
@@ -88,9 +119,38 @@ export default function FileGrid({
       const filesToDrag = selectedFiles.has(file.id)
         ? Array.from(selectedFiles)
         : [file.id];
-      
+
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('application/json', JSON.stringify({ fileIds: filesToDrag }));
+
+      // Custom drag preview with file count
+      const preview = document.createElement('div');
+      preview.style.position = 'fixed';
+      preview.style.top = '0';
+      preview.style.left = '0';
+      preview.style.zIndex = '9999';
+      preview.style.pointerEvents = 'none';
+      preview.style.background = 'rgba(30, 41, 59, 0.9)';
+      preview.style.color = 'white';
+      preview.style.padding = '8px 12px';
+      preview.style.borderRadius = '8px';
+      preview.style.border = '1px solid rgba(148,163,184,0.4)';
+      preview.style.boxShadow = '0 4px 16px rgba(0,0,0,0.4)';
+      preview.style.fontSize = '12px';
+      preview.style.display = 'flex';
+      preview.style.alignItems = 'center';
+      preview.style.gap = '8px';
+      preview.innerHTML = `<span>📦</span><span>${filesToDrag.length} file${filesToDrag.length > 1 ? 's' : ''}</span>`;
+      document.body.appendChild(preview);
+      try {
+        e.dataTransfer.setDragImage(preview, -10, -10);
+      } catch {}
+
+      // Clean up preview element shortly after drag starts
+      requestAnimationFrame(() => {
+        setTimeout(() => preview.remove(), 0);
+      });
+
       onDragStart(filesToDrag);
     },
     [selectedFiles, onDragStart]
@@ -107,6 +167,8 @@ export default function FileGrid({
       selectedFiles={selectedFiles}
       highlightedFile={highlightedFile}
       thumbnails={thumbnails}
+      loadingThumbs={loadingThumbs}
+      onContextMenu={onContextMenu}
       onCheckboxClick={handleCheckboxClick}
       onClick={handleClick}
       onFolderOpen={onFolderOpen}
@@ -122,7 +184,9 @@ export default function FileGrid({
       selectedFiles={selectedFiles}
       highlightedFile={highlightedFile}
       thumbnails={thumbnails}
+      loadingThumbs={loadingThumbs}
       gridSize={gridSize}
+      onContextMenu={onContextMenu}
       onCheckboxClick={handleCheckboxClick}
       onClick={handleClick}
       onFolderOpen={onFolderOpen}
@@ -138,17 +202,19 @@ export default function FileGrid({
     selectedFiles={selectedFiles}
     highlightedFile={highlightedFile}
     thumbnails={thumbnails}
+    loadingThumbs={loadingThumbs}
     gridSize={gridSize}
     onCheckboxClick={handleCheckboxClick}
     onClick={handleClick}
     onFolderOpen={onFolderOpen}
     onDragStart={handleDragStart}
     onDragEnd={handleDragEnd}
+    onContextMenu={onContextMenu}
   />;
 }
 
 // Grid View Component
-function FileGridView({ folders, files, selectedFiles, highlightedFile, thumbnails, gridSize, onCheckboxClick, onClick, onFolderOpen, onDragStart, onDragEnd }: any) {
+function FileGridView({ folders, files, selectedFiles, highlightedFile, thumbnails, loadingThumbs, gridSize, onCheckboxClick, onClick, onFolderOpen, onDragStart, onDragEnd, onContextMenu }: any) {
   const size = getGridItemSize(gridSize);
   
   return (
@@ -174,14 +240,17 @@ function FileGridView({ folders, files, selectedFiles, highlightedFile, thumbnai
         const isSelected = selectedFiles.has(file.id);
         const isHighlighted = highlightedFile === file.id;
         const thumb = thumbnails.get(file.id);
+        const isLoading = loadingThumbs.has(file.id);
 
         return (
           <div
             key={file.id}
+            data-file-id={file.id}
             draggable
             onDragStart={(e) => onDragStart(e, file)}
             onDragEnd={onDragEnd}
             onClick={(e) => onClick(file, idx, e)}
+            onContextMenu={(e) => { e.preventDefault(); onContextMenu && onContextMenu(file, { x: e.clientX, y: e.clientY }); }}
             className={`relative rounded-lg border p-3 transition-all cursor-pointer group ${
               isSelected
                 ? 'border-blue-500 bg-blue-500/10 ring-2 ring-blue-500/30'
@@ -203,7 +272,11 @@ function FileGridView({ folders, files, selectedFiles, highlightedFile, thumbnai
 
             {/* Thumbnail or Icon */}
             <div className="flex items-center justify-center mb-2" style={{ height: `${size.height - 60}px` }}>
-              {thumb ? (
+              {isLoading ? (
+                <div className="w-full h-full flex items-center justify-center">
+                  <div className="w-12 h-12 border-4 border-slate-700 border-t-blue-500 rounded-full animate-spin" />
+                </div>
+              ) : thumb ? (
                 <img src={thumb} alt={file.name} className="max-w-full max-h-full object-contain rounded" />
               ) : (
                 <div className="text-5xl">{getFileTypeIcon(file.extension)}</div>
@@ -221,9 +294,8 @@ function FileGridView({ folders, files, selectedFiles, highlightedFile, thumbnai
 }
 
 // Gallery View Component (larger tiles, image-focused)
-function FileGalleryView({ folders, files, selectedFiles, highlightedFile, thumbnails, gridSize, onCheckboxClick, onClick, onFolderOpen, onDragStart, onDragEnd }: any) {
+function FileGalleryView({ folders, files, selectedFiles, highlightedFile, thumbnails, loadingThumbs, gridSize, onCheckboxClick, onClick, onFolderOpen, onDragStart, onDragEnd, onContextMenu }: any) {
   const size = getGalleryItemSize(gridSize);
-  
   return (
     <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${size.width}px, 1fr))` }}>
       {/* Folders first */}
@@ -243,20 +315,23 @@ function FileGalleryView({ folders, files, selectedFiles, highlightedFile, thumb
           </div>
         </div>
       ))}
-      
+
       {/* Files */}
       {files.map((file: FileItem, idx: number) => {
         const isSelected = selectedFiles.has(file.id);
         const isHighlighted = highlightedFile === file.id;
         const thumb = thumbnails.get(file.id);
+        const isLoading = loadingThumbs?.has(file.id);
 
         return (
           <div
             key={file.id}
+            data-file-id={file.id}
             draggable
             onDragStart={(e) => onDragStart(e, file)}
             onDragEnd={onDragEnd}
             onClick={(e) => onClick(file, idx, e)}
+            onContextMenu={(e: React.MouseEvent) => { e.preventDefault(); onContextMenu && onContextMenu(file, { x: e.clientX, y: e.clientY }); }}
             className={`relative rounded-lg overflow-hidden transition-all cursor-pointer group ${
               isSelected
                 ? 'ring-4 ring-blue-500'
@@ -277,7 +352,11 @@ function FileGalleryView({ folders, files, selectedFiles, highlightedFile, thumb
             </div>
 
             {/* Thumbnail */}
-            {thumb ? (
+            {isLoading ? (
+              <div className="w-full h-full flex items-center justify-center bg-slate-900/60">
+                <div className="w-12 h-12 border-4 border-slate-700 border-t-blue-500 rounded-full animate-spin" />
+              </div>
+            ) : thumb ? (
               <img src={thumb} alt={file.name} className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center bg-slate-900/60">
@@ -298,7 +377,8 @@ function FileGalleryView({ folders, files, selectedFiles, highlightedFile, thumb
 }
 
 // List View Component (compact, information-dense)
-function FileListView({ folders, files, selectedFiles, highlightedFile, thumbnails, onCheckboxClick, onClick, onFolderOpen, onDragStart, onDragEnd }: any) {
+// List View Component
+function FileListView({ folders, files, selectedFiles, highlightedFile, thumbnails, loadingThumbs, onCheckboxClick, onClick, onFolderOpen, onDragStart, onDragEnd, onContextMenu }: any) {
   return (
     <div className="border border-slate-800 rounded-lg overflow-hidden">
       <table className="w-full text-sm">
@@ -315,7 +395,7 @@ function FileListView({ folders, files, selectedFiles, highlightedFile, thumbnai
         <tbody>
           {/* Folders first */}
           {folders.map((folder: Folder) => (
-            <tr
+              <tr
               key={folder.id}
               onDoubleClick={() => onFolderOpen(folder.id)}
               className="border-t border-slate-800/50 transition-colors cursor-pointer hover:bg-slate-800/30"
@@ -340,10 +420,12 @@ function FileListView({ folders, files, selectedFiles, highlightedFile, thumbnai
             return (
               <tr
                 key={file.id}
+                data-file-id={file.id}
                 draggable
                 onDragStart={(e) => onDragStart(e, file)}
                 onDragEnd={onDragEnd}
                 onClick={(e) => onClick(file, idx, e)}
+                onContextMenu={(e) => { e.preventDefault(); onContextMenu && onContextMenu(file, { x: e.clientX, y: e.clientY }); }}
                 className={`border-t border-slate-800/50 transition-colors cursor-pointer group ${
                   isSelected
                     ? 'bg-blue-500/10'
