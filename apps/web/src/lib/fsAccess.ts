@@ -1,4 +1,5 @@
 import type { FileItem, Folder } from '../AppTypes';
+import { computeFileHash, computeQuickHash } from './contentHash';
 
 function extOf(name: string): string {
   const i = name.lastIndexOf('.');
@@ -10,6 +11,8 @@ function nextId(prefix: string) { return `${prefix}_${++idSeq}`; }
 
 export type ScanOptions = {
   maxEntries?: number; // safety cap for huge folders
+  enableContentHashing?: boolean; // compute SHA-256 hashes for duplicate detection
+  onHashProgress?: (current: number, total: number, fileName: string) => void; // progress callback
 };
 
 export async function pickAndScanDirectory(opts: ScanOptions = {}): Promise<Folder> {
@@ -19,7 +22,28 @@ export async function pickAndScanDirectory(opts: ScanOptions = {}): Promise<Fold
   }
   const rootHandle: any = await picker();
   idSeq = 0;
-  return await scanDirHandle(rootHandle, opts);
+  
+  const folder = await scanDirHandle(rootHandle, opts);
+  
+  // If content hashing is enabled, compute hashes for all files
+  if (opts.enableContentHashing) {
+    const allFiles = collectAllFiles(folder);
+    for (let i = 0; i < allFiles.length; i++) {
+      const file = allFiles[i];
+      if (!file.handle) continue; // Skip if no handle available
+      
+      try {
+        opts.onHashProgress?.(i + 1, allFiles.length, file.name);
+        file.contentHash = await computeFileHash(file.handle);
+      } catch (err) {
+        console.warn(`Failed to hash ${file.name}:`, err);
+        // Fall back to quick hash if full hash fails
+        file.contentHash = computeQuickHash(await file.handle.getFile());
+      }
+    }
+  }
+  
+  return folder;
 }
 
 async function scanDirHandle(dirHandle: any, opts: ScanOptions, parentPath: string = ''): Promise<Folder> {
@@ -54,4 +78,15 @@ async function scanDirHandle(dirHandle: any, opts: ScanOptions, parentPath: stri
     }
   }
   return folder;
+}
+
+/**
+ * Collect all files from folder structure recursively
+ */
+function collectAllFiles(folder: Folder): FileItem[] {
+  const files = [...folder.files];
+  for (const subfolder of folder.folders) {
+    files.push(...collectAllFiles(subfolder));
+  }
+  return files;
 }
