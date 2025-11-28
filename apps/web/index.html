@@ -2,13 +2,80 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0f172a" />
-  <title>FileFlow • Storage Manager</title>
+    <meta name="description" content="Advanced file management system with drag-and-drop, storage analytics, AI-powered organization, and intelligent cleanup tools." />
+    <meta name="keywords" content="file manager, storage, cleanup, duplicates, junk cleaner, file organization" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="FileFlow" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" href="/icons/icon-192x192.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <title>FileFlow • Storage Manager</title>
   </head>
   <body class="bg-slate-900 text-slate-100">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Register service worker for offline support
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker
+            .register('/service-worker.js')
+            .then((reg) => {
+              console.log('[App] Service Worker registered:', reg);
+              
+              // Check for updates periodically
+              setInterval(() => {
+                reg.update();
+              }, 60000); // Check every minute
+              
+              // Listen for new service worker ready
+              reg.addEventListener('updatefound', () => {
+                const newWorker = reg.installing;
+                newWorker.addEventListener('statechange', () => {
+                  if (newWorker.state === 'activated') {
+                    console.log('[App] New Service Worker activated');
+                    // Optionally show update notification here
+                  }
+                });
+              });
+            })
+            .catch((err) => {
+              console.warn('[App] Service Worker registration failed:', err);
+            });
+        });
+      }
+
+      // Handle install prompt (beforeinstallprompt event)
+      let installPrompt;
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        installPrompt = e;
+        console.log('[App] Install prompt ready');
+        // You can store this and trigger it from your UI (e.g., an "Install" button)
+      });
+
+      // Listen for app installed event
+      window.addEventListener('appinstalled', () => {
+        console.log('[App] FileFlow installed as PWA');
+        installPrompt = null;
+      });
+
+      // Make installPrompt globally available if needed
+      window.fileflowInstallPrompt = () => {
+        if (installPrompt) {
+          installPrompt.prompt();
+          installPrompt.userChoice.then((choiceResult) => {
+            if (choiceResult.outcome === 'accepted') {
+              console.log('[App] User accepted install');
+            }
+            installPrompt = null;
+          });
+        }
+      };
+    </script>
   </body>
   
 </html>

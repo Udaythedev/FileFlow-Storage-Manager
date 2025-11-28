@@ -18,6 +18,9 @@ import ToastContainer, { type Toast } from './components/Toast';
 import ContextMenu, { type MenuItem } from './components/ContextMenu';
 import { openWithDefaultApp, getMimeType } from './lib/fileOpener';
 import { ProgressModal } from './components/Skeleton';
+import PWANotifications from './components/PWANotifications';
+import { initPWA } from './lib/pwa';
+import { OrganizationSuggestions } from './components/OrganizationSuggestions';
 
 function bytes(n: number) {
   if (n < 1024) return `${n} B`;
@@ -194,6 +197,14 @@ export default function App() {
     setMenuState({ open: true, x: pos.x, y: pos.y, file });
   };
   const closeContextMenu = () => setMenuState(s => ({ ...s, open: false }));
+
+  // Organization suggestions modal
+  const [showOrgSuggestions, setShowOrgSuggestions] = useState(false);
+
+  // Initialize PWA features on mount
+  useEffect(() => {
+    initPWA();
+  }, []);
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -728,6 +739,14 @@ export default function App() {
             <button id="reset-mock-btn" className="px-3 py-1.5 text-sm rounded bg-slate-800 hover:bg-slate-700 border border-slate-700" title="Reset to mock data">Reset</button>
             <button id="junk-btn" className={`px-3 py-1.5 text-sm rounded border ${showJunk ? 'bg-amber-800/50 border-amber-700' : 'bg-slate-800 hover:bg-slate-700 border-slate-700'}`} title="Toggle Junk Cleaner">Junk Cleaner</button>
             <button id="dupe-btn" className={`px-3 py-1.5 text-sm rounded border ${showDupes ? 'bg-emerald-800/50 border-emerald-700' : 'bg-slate-800 hover:bg-slate-700 border-slate-700'}`} title="Toggle Duplicate Finder">Duplicates</button>
+            <button 
+              onClick={() => setShowOrgSuggestions(true)}
+              className="px-3 py-1.5 text-sm rounded bg-slate-800 hover:bg-slate-700 border border-slate-700" 
+              title="Get organization suggestions"
+              disabled={selectedFiles.size === 0}
+            >
+              Organize ({selectedFiles.size})
+            </button>
           </div>
         </header>
 
@@ -1037,6 +1056,15 @@ export default function App() {
           current={progressModal.current}
           total={progressModal.total}
           description={progressModal.description}
+        />
+        <PWANotifications />
+        <OrganizationSuggestions
+          isOpen={showOrgSuggestions}
+          onClose={() => setShowOrgSuggestions(false)}
+          selectedFiles={Array.from(selectedFiles).flatMap(fileId => {
+            const found = displayFiles.find(f => f.id === fileId);
+            return found ? [found] : [];
+          })}
         />
       </div>
     );

@@ -6,5 +6,17 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173
+  },
+  build: {
+    // Ensure public assets are copied
+    copyPublicDir: true,
+    // Optimize build
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'recharts': ['recharts']
+        }
+      }
+    }
   }
 });
